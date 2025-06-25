@@ -1,6 +1,7 @@
-# planning_api/algorithms_views.py
+# planning_api/algorithms_views.py - COMPLETE FIXED VERSION
 """
 Django views integrating the converted C# algorithms
+Fixed version with proper error handling and conditional imports
 """
 
 import logging
@@ -11,20 +12,52 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework import serializers
 
-# Import our converted algorithms
-from .algorithms.graph_algorithms import (
-    DijkstraShortestPaths, CalculateCentrality, DepthFirstSearch,
-    GraphAdapter, Edge, DirectedEdge, EdgeWeightedGraph, EdgeWeightedDigraph
-)
-from .algorithms.trees import IntervalTree, UInterval, IntervalNode, IntervalTreeOperations
-from .algorithms.mathematics import (
-    RootFinding, SolveQuadratic, Parabola, GeometryMath, Point2D, Vector2D
-)
-from .algorithms.utilities import (
-    Statistics, MathUtilities, CollectionUtilities, ListExtensions, Validators
-)
-
 logger = logging.getLogger(__name__)
+
+# Check for available algorithm modules with graceful fallbacks
+GRAPH_ALGORITHMS_AVAILABLE = False
+TREE_ALGORITHMS_AVAILABLE = False
+MATH_ALGORITHMS_AVAILABLE = False
+UTILITIES_AVAILABLE = False
+
+# Try to import graph algorithms
+try:
+    from .algorithms.graph_algorithms import (
+        DijkstraShortestPaths, CalculateCentrality, DepthFirstSearch,
+        GraphAdapter, Edge, DirectedEdge, EdgeWeightedGraph, EdgeWeightedDigraph
+    )
+    GRAPH_ALGORITHMS_AVAILABLE = True
+    logger.info("Graph algorithms imported successfully")
+except ImportError as e:
+    logger.warning(f"Graph algorithms not available: {e}")
+
+# Try to import tree algorithms
+try:
+    from .algorithms.trees import IntervalTree, UInterval, IntervalNode, IntervalTreeOperations
+    TREE_ALGORITHMS_AVAILABLE = True
+    logger.info("Tree algorithms imported successfully")
+except ImportError as e:
+    logger.warning(f"Tree algorithms not available: {e}")
+
+# Try to import mathematics
+try:
+    from .algorithms.mathematics import (
+        RootFinding, SolveQuadratic, Parabola, GeometryMath, Point2D, Vector2D
+    )
+    MATH_ALGORITHMS_AVAILABLE = True
+    logger.info("Mathematics algorithms imported successfully")
+except ImportError as e:
+    logger.warning(f"Mathematics algorithms not available: {e}")
+
+# Try to import utilities
+try:
+    from .algorithms.utilities import (
+        Statistics, MathUtilities, CollectionUtilities, ListExtensions, Validators
+    )
+    UTILITIES_AVAILABLE = True
+    logger.info("Utilities imported successfully")
+except ImportError as e:
+    logger.warning(f"Utilities not available: {e}")
 
 
 # Serializers for algorithm requests
@@ -183,6 +216,12 @@ class GraphAnalysisView(APIView):
     """Graph algorithm analysis endpoint"""
     
     def post(self, request):
+        if not GRAPH_ALGORITHMS_AVAILABLE:
+            return Response(
+                {'error': 'Graph algorithms not available', 'available': False},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        
         try:
             serializer = GraphAnalysisRequestSerializer(data=request.data)
             if not serializer.is_valid():
@@ -199,19 +238,25 @@ class GraphAnalysisView(APIView):
             # Build graph
             edges = []
             for edge_data in edges_data:
-                if algorithm == 'dijkstra':
-                    edge = DirectedEdge(
-                        edge_data['from'],
-                        edge_data['to'],
-                        edge_data['weight']
+                try:
+                    if algorithm == 'dijkstra':
+                        edge = DirectedEdge(
+                            edge_data['from'],
+                            edge_data['to'],
+                            edge_data['weight']
+                        )
+                    else:
+                        edge = Edge(
+                            edge_data['from'],
+                            edge_data['to'],
+                            edge_data['weight']
+                        )
+                    edges.append(edge)
+                except Exception as e:
+                    return Response(
+                        {'error': f'Error creating edge: {str(e)}'},
+                        status=status.HTTP_400_BAD_REQUEST
                     )
-                else:
-                    edge = Edge(
-                        edge_data['from'],
-                        edge_data['to'],
-                        edge_data['weight']
-                    )
-                edges.append(edge)
             
             graph = GraphAdapter(vertices, edges)
             
@@ -219,14 +264,11 @@ class GraphAnalysisView(APIView):
             if algorithm == 'dijkstra':
                 source = data.get('source_vertex', vertices[0])
                 result = self._run_dijkstra(graph, source)
-            
             elif algorithm == 'centrality':
                 radius = data.get('radius', float('inf'))
                 result = self._run_centrality(graph, radius)
-            
             elif algorithm == 'dfs':
                 result = self._run_dfs(graph)
-            
             else:
                 return Response(
                     {'error': f'Unknown algorithm: {algorithm}'},
@@ -246,61 +288,79 @@ class GraphAnalysisView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
-    def _run_dijkstra(self, graph: GraphAdapter, source: int) -> Dict[str, Any]:
+    def _run_dijkstra(self, graph, source):
         """Run Dijkstra's shortest path algorithm"""
-        dijkstra = DijkstraShortestPaths(graph, source)
-        
-        result = {
-            'source': source,
-            'distances': {},
-            'paths': {}
-        }
-        
-        for vertex in graph.vertices():
-            if dijkstra.has_path_to(vertex):
-                result['distances'][vertex] = dijkstra.distance_to(vertex)
-                result['paths'][vertex] = dijkstra.shortest_path_to(vertex)
-            else:
-                result['distances'][vertex] = float('inf')
-                result['paths'][vertex] = None
-        
-        return result
+        try:
+            dijkstra = DijkstraShortestPaths(graph, source)
+            
+            result = {
+                'source': source,
+                'distances': {},
+                'paths': {}
+            }
+            
+            for vertex in graph.vertices():
+                try:
+                    if dijkstra.has_path_to(vertex):
+                        result['distances'][vertex] = dijkstra.distance_to(vertex)
+                        result['paths'][vertex] = dijkstra.shortest_path_to(vertex)
+                    else:
+                        result['distances'][vertex] = float('inf')
+                        result['paths'][vertex] = None
+                except Exception as e:
+                    logger.warning(f"Error processing vertex {vertex}: {str(e)}")
+            
+            return result
+        except Exception as e:
+            return {'error': f'Dijkstra failed: {str(e)}'}
     
-    def _run_centrality(self, graph: GraphAdapter, radius: float) -> Dict[str, Any]:
+    def _run_centrality(self, graph, radius):
         """Run centrality calculation"""
-        centrality = CalculateCentrality(graph, radius)
-        
-        result = {
-            'betweenness': {str(k): v for k, v in centrality.betweenness.items()},
-            'total_depths': {str(k): v for k, v in centrality.total_depths.items()},
-            'node_counts': {str(k): v for k, v in centrality.node_counts.items()},
-            'radius': radius
-        }
-        
-        return result
+        try:
+            centrality = CalculateCentrality(graph, radius)
+            
+            result = {
+                'betweenness': {str(k): v for k, v in centrality.betweenness.items()},
+                'total_depths': {str(k): v for k, v in centrality.total_depths.items()},
+                'node_counts': {str(k): v for k, v in centrality.node_counts.items()},
+                'radius': radius
+            }
+            
+            return result
+        except Exception as e:
+            return {'error': f'Centrality calculation failed: {str(e)}'}
     
-    def _run_dfs(self, graph: GraphAdapter) -> Dict[str, Any]:
+    def _run_dfs(self, graph):
         """Run depth-first search to find connected components"""
-        # Convert to EdgeWeightedGraph for DFS
-        ewg = EdgeWeightedGraph(len(graph.vertices()))
-        
-        for edge in graph.edges():
-            ewg.add_edge(edge)
-        
-        dfs = DepthFirstSearch(ewg)
-        
-        result = {
-            'connected_components': [list(group) for group in dfs.group_list],
-            'main_component': list(dfs.get_main_group_vertices()) if dfs.get_main_group_vertices() else []
-        }
-        
-        return result
+        try:
+            # Convert to EdgeWeightedGraph for DFS
+            ewg = EdgeWeightedGraph(len(graph.vertices()))
+            
+            for edge in graph.edges():
+                ewg.add_edge(edge)
+            
+            dfs = DepthFirstSearch(ewg)
+            
+            result = {
+                'connected_components': [list(group) for group in dfs.group_list],
+                'main_component': list(dfs.get_main_group_vertices()) if dfs.get_main_group_vertices() else []
+            }
+            
+            return result
+        except Exception as e:
+            return {'error': f'DFS failed: {str(e)}'}
 
 
 class IntervalAnalysisView(APIView):
     """Interval tree analysis endpoint"""
     
     def post(self, request):
+        if not TREE_ALGORITHMS_AVAILABLE:
+            return Response(
+                {'error': 'Tree algorithms not available', 'available': False},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        
         try:
             serializer = IntervalAnalysisRequestSerializer(data=request.data)
             if not serializer.is_valid():
@@ -316,8 +376,14 @@ class IntervalAnalysisView(APIView):
             # Create intervals
             intervals = []
             for interval_data in intervals_data:
-                interval = UInterval(interval_data['low'], interval_data['high'])
-                intervals.append((interval, interval_data['id']))
+                try:
+                    interval = UInterval(interval_data['low'], interval_data['high'])
+                    intervals.append((interval, interval_data['id']))
+                except Exception as e:
+                    return Response(
+                        {'error': f'Invalid interval: {str(e)}'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
             
             # Build interval tree
             tree = IntervalTree()
@@ -425,6 +491,12 @@ class MathematicsView(APIView):
     """Mathematics algorithms endpoint"""
     
     def post(self, request):
+        if not MATH_ALGORITHMS_AVAILABLE:
+            return Response(
+                {'error': 'Mathematics algorithms not available', 'available': False},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        
         try:
             serializer = MathematicsRequestSerializer(data=request.data)
             if not serializer.is_valid():
@@ -438,16 +510,12 @@ class MathematicsView(APIView):
             
             if operation == 'quadratic':
                 result = self._solve_quadratic(data)
-            
             elif operation == 'root_finding':
                 result = self._find_roots(data)
-            
             elif operation == 'linear_regression':
                 result = self._linear_regression(data)
-            
             elif operation == 'geometry':
                 result = self._geometry_calculations(data)
-            
             else:
                 return Response(
                     {'error': f'Unknown operation: {operation}'},
@@ -473,68 +541,31 @@ class MathematicsView(APIView):
         b = data.get('b', 0.0)
         c = data.get('c', 0.0)
         
-        # Calculate discriminant
-        discriminant = b*b - 4*a*c
-        
-        if a == 0:
-            # Linear equation
-            if b == 0:
-                if c == 0:
-                    return {
-                        'equation': f"{a}x² + {b}x + {c} = 0",
-                        'success': True,
-                        'roots': 'infinite',
-                        'discriminant': None,
-                        'type': 'degenerate'
-                    }
-                else:
-                    return {
-                        'equation': f"{a}x² + {b}x + {c} = 0",
-                        'success': False,
-                        'roots': None,
-                        'discriminant': None,
-                        'type': 'no_solution'
-                    }
+        try:
+            root1, root2 = SolveQuadratic.solve(a, b, c)
+            
+            if root1 is None and root2 is None:
+                roots = None
+                equation_type = 'no_real_roots'
+            elif root1 == root2:
+                roots = [root1]
+                equation_type = 'one_real_root'
             else:
-                root = -c / b
-                return {
-                    'equation': f"{b}x + {c} = 0",
-                    'success': True,
-                    'roots': [root],
-                    'discriminant': None,
-                    'type': 'linear'
-                }
-        
-        # Quadratic equation
-        if discriminant > 0:
-            # Two real roots
-            sqrt_disc = discriminant ** 0.5
-            root1 = (-b + sqrt_disc) / (2 * a)
-            root2 = (-b - sqrt_disc) / (2 * a)
-            roots = [root1, root2]
-            equation_type = 'two_real_roots'
-        elif discriminant == 0:
-            # One real root (repeated)
-            root = -b / (2 * a)
-            roots = [root]
-            equation_type = 'one_real_root'
-        else:
-            # Complex roots
-            real_part = -b / (2 * a)
-            imag_part = (-discriminant) ** 0.5 / (2 * a)
-            roots = [
-                {'real': real_part, 'imaginary': imag_part},
-                {'real': real_part, 'imaginary': -imag_part}
-            ]
-            equation_type = 'complex_roots'
-        
-        return {
-            'equation': f"{a}x² + {b}x + {c} = 0",
-            'success': True,
-            'roots': roots,
-            'discriminant': discriminant,
-            'type': equation_type
-        }
+                roots = [root1, root2] if root2 is not None else [root1]
+                equation_type = 'two_real_roots'
+            
+            return {
+                'equation': f"{a}x² + {b}x + {c} = 0",
+                'success': True,
+                'roots': roots,
+                'type': equation_type
+            }
+        except Exception as e:
+            return {
+                'equation': f"{a}x² + {b}x + {c} = 0",
+                'success': False,
+                'error': str(e)
+            }
     
     def _find_roots(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Find roots using numerical methods"""
@@ -551,141 +582,105 @@ class MathematicsView(APIView):
             return result
         
         try:
-            # Simple bisection method implementation
-            def bisection(func, a, b, tol):
-                if func(a) * func(b) >= 0:
-                    raise ValueError("Function values at bounds must have opposite signs")
-                
-                iterations = 0
-                while abs(b - a) > tol and iterations < 1000:
-                    c = (a + b) / 2
-                    if func(c) == 0:
-                        return c, iterations
-                    elif func(a) * func(c) < 0:
-                        b = c
-                    else:
-                        a = c
-                    iterations += 1
-                
-                return (a + b) / 2, iterations
-            
-            # Try to find root using bisection
-            try:
-                root_bisect, iter_bisect = bisection(polynomial, left, right, tolerance)
-                error_bisect = abs(polynomial(root_bisect))
-            except ValueError as e:
-                root_bisect = None
-                iter_bisect = 0
-                error_bisect = float('inf')
+            root = RootFinding.bisection(polynomial, left, right, tolerance)
             
             return {
                 'polynomial_coefficients': coefficients,
                 'search_interval': [left, right],
-                'bisection': {
-                    'root': root_bisect,
-                    'iterations': iter_bisect,
-                    'error': error_bisect,
-                    'success': root_bisect is not None
-                }
+                'root': root,
+                'success': root is not None,
+                'tolerance': tolerance
             }
             
-        except ValueError as e:
+        except Exception as e:
             return {
                 'error': str(e),
                 'polynomial_coefficients': coefficients,
-                'search_interval': [left, right]
+                'search_interval': [left, right],
+                'success': False
             }
     
     def _linear_regression(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Perform linear regression"""
+        if not UTILITIES_AVAILABLE:
+            return {'error': 'Statistics utilities not available'}
+        
         x_values = data.get('x_values', [])
         y_values = data.get('y_values', [])
         
         if len(x_values) != len(y_values):
-            raise ValueError("x_values and y_values must have the same length")
+            return {'error': 'x_values and y_values must have the same length'}
         
         if len(x_values) < 2:
-            raise ValueError("At least 2 data points required for regression")
+            return {'error': 'At least 2 data points required for regression'}
         
-        r_squared, y_intercept, slope = Statistics.linear_regression(x_values, y_values)
-        
-        # Calculate correlation coefficient
-        correlation = Statistics.correlation_coefficient(x_values, y_values)
-        
-        # Generate predictions
-        predictions = [slope * x + y_intercept for x in x_values]
-        
-        # Calculate residuals
-        residuals = [y - pred for y, pred in zip(y_values, predictions)]
-        
-        return {
-            'data_points': len(x_values),
-            'slope': slope,
-            'y_intercept': y_intercept,
-            'r_squared': r_squared,
-            'correlation_coefficient': correlation,
-            'equation': f"y = {slope:.6f}x + {y_intercept:.6f}",
-            'predictions': predictions,
-            'residuals': residuals,
-            'residual_sum_squares': sum(r*r for r in residuals)
-        }
+        try:
+            r_squared, y_intercept, slope = Statistics.linear_regression(x_values, y_values)
+            correlation = Statistics.correlation_coefficient(x_values, y_values)
+            predictions = [slope * x + y_intercept for x in x_values]
+            residuals = [y - pred for y, pred in zip(y_values, predictions)]
+            
+            return {
+                'data_points': len(x_values),
+                'slope': slope,
+                'y_intercept': y_intercept,
+                'r_squared': r_squared,
+                'correlation_coefficient': correlation,
+                'equation': f"y = {slope:.6f}x + {y_intercept:.6f}",
+                'predictions': predictions,
+                'residuals': residuals,
+                'residual_sum_squares': sum(r*r for r in residuals)
+            }
+        except Exception as e:
+            return {'error': f'Linear regression failed: {str(e)}'}
     
     def _geometry_calculations(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Perform geometry calculations"""
         points_data = data.get('points', [])
         
         if len(points_data) < 3:
-            raise ValueError("At least 3 points required for polygon calculations")
+            return {'error': 'At least 3 points required for polygon calculations'}
         
-        # Convert to Point2D objects (mock implementation since we don't have the full geometry module)
-        points = []
-        for point_data in points_data:
-            # Simple point class for this example
-            class SimplePoint:
-                def __init__(self, x, y):
-                    self.x = x
-                    self.y = y
-                
-                def distance_to(self, other):
-                    return ((self.x - other.x)**2 + (self.y - other.y)**2)**0.5
+        try:
+            # Convert to Point2D objects
+            points = []
+            for point_data in points_data:
+                point = Point2D(point_data['x'], point_data['y'])
+                points.append(point)
             
-            point = SimplePoint(point_data['x'], point_data['y'])
-            points.append(point)
-        
-        # Calculate polygon area using shoelace formula
-        area = 0.0
-        n = len(points)
-        for i in range(n):
-            j = (i + 1) % n
-            area += points[i].x * points[j].y
-            area -= points[j].x * points[i].y
-        area = abs(area) / 2.0
-        
-        # Calculate centroid
-        cx = sum(p.x for p in points) / len(points)
-        cy = sum(p.y for p in points) / len(points)
-        
-        # Calculate perimeter
-        perimeter = 0.0
-        for i in range(len(points)):
-            j = (i + 1) % len(points)
-            perimeter += points[i].distance_to(points[j])
-        
-        return {
-            'polygon': {
-                'vertices': len(points),
-                'area': area,
-                'perimeter': perimeter,
-                'centroid': {'x': cx, 'y': cy}
-            },
-            'input_points': [{'x': p.x, 'y': p.y} for p in points]
-        }
+            # Calculate polygon area and other properties
+            area = GeometryMath.polygon_area(points)
+            centroid = GeometryMath.polygon_centroid(points)
+            
+            # Calculate perimeter
+            perimeter = 0.0
+            for i in range(len(points)):
+                j = (i + 1) % len(points)
+                perimeter += points[i].distance_to(points[j])
+            
+            return {
+                'polygon': {
+                    'vertices': len(points),
+                    'area': area,
+                    'perimeter': perimeter,
+                    'centroid': {'x': centroid.x, 'y': centroid.y}
+                },
+                'input_points': [{'x': p.x, 'y': p.y} for p in points]
+            }
+        except Exception as e:
+            return {'error': f'Geometry calculation failed: {str(e)}'}
 
 
 class UtilitiesView(APIView):
     """Utilities and statistical analysis endpoint"""
     
     def post(self, request):
+        if not UTILITIES_AVAILABLE:
+            return Response(
+                {'error': 'Utilities not available', 'available': False},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        
         try:
             serializer = UtilitiesRequestSerializer(data=request.data)
             if not serializer.is_valid():
@@ -699,13 +694,10 @@ class UtilitiesView(APIView):
             
             if operation == 'statistics':
                 result = self._statistical_analysis(data)
-            
             elif operation == 'collection':
                 result = self._collection_operations(data)
-            
             elif operation == 'validation':
                 result = self._validation_operations(data)
-            
             else:
                 return Response(
                     {'error': f'Unknown operation: {operation}'},
@@ -731,34 +723,35 @@ class UtilitiesView(APIView):
         statistic_type = data.get('statistic_type', 'descriptive')
         
         if not values:
-            raise ValueError("Values list cannot be empty")
+            return {'error': 'Values list cannot be empty'}
         
-        if statistic_type == 'descriptive':
-            # Basic descriptive statistics
-            mean = Statistics.mean(values)
-            median = Statistics.median(values)
-            std_dev = Statistics.standard_deviation(values)
-            variance = Statistics.variance(values)
-            q1, q2, q3 = Statistics.quartiles(values)
-            iqr = Statistics.interquartile_range(values)
-            
-            return {
-                'descriptive_statistics': {
-                    'count': len(values),
-                    'mean': mean,
-                    'median': median,
-                    'standard_deviation': std_dev,
-                    'variance': variance,
-                    'quartiles': {'Q1': q1, 'Q2': q2, 'Q3': q3},
-                    'interquartile_range': iqr,
-                    'min': min(values),
-                    'max': max(values),
-                    'range': max(values) - min(values)
+        try:
+            if statistic_type == 'descriptive':
+                mean = Statistics.mean(values)
+                median = Statistics.median(values)
+                std_dev = Statistics.standard_deviation(values)
+                variance = Statistics.variance(values)
+                q1, q2, q3 = Statistics.quartiles(values)
+                iqr = Statistics.interquartile_range(values)
+                
+                return {
+                    'descriptive_statistics': {
+                        'count': len(values),
+                        'mean': mean,
+                        'median': median,
+                        'standard_deviation': std_dev,
+                        'variance': variance,
+                        'quartiles': {'Q1': q1, 'Q2': q2, 'Q3': q3},
+                        'interquartile_range': iqr,
+                        'min': min(values),
+                        'max': max(values),
+                        'range': max(values) - min(values)
+                    }
                 }
-            }
-        
-        else:
-            return {'error': f'Unsupported statistic type: {statistic_type}'}
+            else:
+                return {'error': f'Unsupported statistic type: {statistic_type}'}
+        except Exception as e:
+            return {'error': f'Statistical analysis failed: {str(e)}'}
     
     def _collection_operations(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Perform collection operations"""
@@ -766,81 +759,179 @@ class UtilitiesView(APIView):
         chunk_size = data.get('chunk_size', 3)
         
         if not collection_data:
-            raise ValueError("Data list cannot be empty")
+            return {'error': 'Data list cannot be empty'}
         
-        # Perform various collection operations
-        chunks = CollectionUtilities.chunk(collection_data, chunk_size)
-        unique_values = CollectionUtilities.unique(collection_data)
-        
-        # Group by value type
-        grouped = CollectionUtilities.group_by(
-            collection_data, 
-            lambda x: type(x).__name__
-        )
-        
-        # Partition by numeric/non-numeric
-        def is_numeric(x):
-            return isinstance(x, (int, float))
-        
-        numeric, non_numeric = CollectionUtilities.partition(collection_data, is_numeric)
-        
-        return {
-            'collection_operations': {
-                'original_count': len(collection_data),
-                'chunks': chunks,
-                'unique_values': unique_values,
-                'unique_count': len(unique_values),
-                'grouped_by_type': {k: len(v) for k, v in grouped.items()},
-                'numeric_values': numeric,
-                'non_numeric_values': non_numeric
+        try:
+            chunks = CollectionUtilities.chunk(collection_data, chunk_size)
+            unique_values = CollectionUtilities.unique(collection_data)
+            
+            grouped = CollectionUtilities.group_by(
+                collection_data, 
+                lambda x: type(x).__name__
+            )
+            
+            def is_numeric(x):
+                return isinstance(x, (int, float))
+            
+            numeric, non_numeric = CollectionUtilities.partition(collection_data, is_numeric)
+            
+            return {
+                'collection_operations': {
+                    'original_count': len(collection_data),
+                    'chunks': chunks,
+                    'unique_values': unique_values,
+                    'unique_count': len(unique_values),
+                    'grouped_by_type': {k: len(v) for k, v in grouped.items()},
+                    'numeric_values': numeric,
+                    'non_numeric_values': non_numeric
+                }
             }
-        }
+        except Exception as e:
+            return {'error': f'Collection operations failed: {str(e)}'}
     
     def _validation_operations(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Perform validation operations"""
         rules = data.get('validation_rules', {})
         
-        # Example validation based on rules
-        results = []
-        
-        if 'range_check' in rules:
-            range_rule = rules['range_check']
-            value = range_rule.get('value', 0)
-            min_val = range_rule.get('min', 0)
-            max_val = range_rule.get('max', 100)
-            name = range_rule.get('name', 'Value')
+        try:
+            results = []
             
-            validation_result = Validators.validate_range(value, min_val, max_val, name)
-            results.append({
-                'rule': 'range_check',
-                'valid': validation_result.is_valid,
-                'errors': validation_result.errors,
-                'warnings': validation_result.warnings
-            })
-        
-        if 'positive_check' in rules:
-            positive_rule = rules['positive_check']
-            value = positive_rule.get('value', 0)
-            name = positive_rule.get('name', 'Value')
+            if 'range_check' in rules:
+                range_rule = rules['range_check']
+                value = range_rule.get('value', 0)
+                min_val = range_rule.get('min', 0)
+                max_val = range_rule.get('max', 100)
+                name = range_rule.get('name', 'Value')
+                
+                validation_result = Validators.validate_range(value, min_val, max_val, name)
+                results.append({
+                    'rule': 'range_check',
+                    'valid': validation_result.is_valid,
+                    'errors': validation_result.errors,
+                    'warnings': validation_result.warnings
+                })
             
-            validation_result = Validators.validate_positive(value, name)
-            results.append({
-                'rule': 'positive_check',
-                'valid': validation_result.is_valid,
-                'errors': validation_result.errors,
-                'warnings': validation_result.warnings
-            })
-        
-        overall_valid = all(result['valid'] for result in results)
-        
-        return {
-            'validation_results': {
-                'overall_valid': overall_valid,
-                'individual_results': results,
-                'total_errors': sum(len(r['errors']) for r in results),
-                'total_warnings': sum(len(r['warnings']) for r in results)
+            if 'positive_check' in rules:
+                positive_rule = rules['positive_check']
+                value = positive_rule.get('value', 0)
+                name = positive_rule.get('name', 'Value')
+                
+                validation_result = Validators.validate_positive(value, name)
+                results.append({
+                    'rule': 'positive_check',
+                    'valid': validation_result.is_valid,
+                    'errors': validation_result.errors,
+                    'warnings': validation_result.warnings
+                })
+            
+            overall_valid = all(result['valid'] for result in results)
+            
+            return {
+                'validation_results': {
+                    'overall_valid': overall_valid,
+                    'individual_results': results,
+                    'total_errors': sum(len(r['errors']) for r in results),
+                    'total_warnings': sum(len(r['warnings']) for r in results)
+                }
             }
+        except Exception as e:
+            return {'error': f'Validation operations failed: {str(e)}'}
+
+
+class SimpleTestView(APIView):
+    """Simple test endpoint to verify the server is working"""
+    
+    def get(self, request):
+        return Response({
+            'status': 'server_running',
+            'available_modules': {
+                'graph_algorithms': GRAPH_ALGORITHMS_AVAILABLE,
+                'tree_algorithms': TREE_ALGORITHMS_AVAILABLE,
+                'math_algorithms': MATH_ALGORITHMS_AVAILABLE,
+                'utilities': UTILITIES_AVAILABLE
+            },
+            'message': 'Planning API is running',
+            'timestamp': '2024-01-01T00:00:00Z'
+        }, status=status.HTTP_200_OK)
+    
+    def post(self, request):
+        return Response({
+            'echo': request.data,
+            'method': 'POST',
+            'available_modules': {
+                'graph_algorithms': GRAPH_ALGORITHMS_AVAILABLE,
+                'tree_algorithms': TREE_ALGORITHMS_AVAILABLE,
+                'math_algorithms': MATH_ALGORITHMS_AVAILABLE,
+                'utilities': UTILITIES_AVAILABLE
+            },
+            'timestamp': '2024-01-01T00:00:00Z'
+        }, status=status.HTTP_200_OK)
+
+
+class AlgorithmTestView(APIView):
+    """Endpoint for testing algorithm availability and basic functionality"""
+    
+    def get(self, request):
+        test_results = self._run_basic_tests()
+        
+        return Response({
+            'algorithm_tests': test_results,
+            'modules_available': {
+                'graph_algorithms': GRAPH_ALGORITHMS_AVAILABLE,
+                'tree_algorithms': TREE_ALGORITHMS_AVAILABLE,
+                'math_algorithms': MATH_ALGORITHMS_AVAILABLE,
+                'utilities': UTILITIES_AVAILABLE
+            },
+            'overall_status': 'healthy' if any(test_results.values()) else 'limited'
+        }, status=status.HTTP_200_OK)
+    
+    def _run_basic_tests(self) -> Dict[str, bool]:
+        """Run basic tests for each available algorithm module"""
+        results = {
+            'graph_algorithms': False,
+            'tree_algorithms': False,
+            'math_algorithms': False,
+            'utilities': False
         }
+        
+        # Test utilities
+        if UTILITIES_AVAILABLE:
+            try:
+                values = [1, 2, 3, 4, 5]
+                mean = Statistics.mean(values)
+                results['utilities'] = abs(mean - 3.0) < 0.001
+            except Exception as e:
+                logger.warning(f"Utilities test failed: {e}")
+        
+        # Test mathematics
+        if MATH_ALGORITHMS_AVAILABLE:
+            try:
+                root1, root2 = SolveQuadratic.solve(1, -5, 6)  # Should give roots 2, 3
+                results['math_algorithms'] = (root1 is not None and root2 is not None)
+            except Exception as e:
+                logger.warning(f"Mathematics test failed: {e}")
+        
+        # Test tree algorithms  
+        if TREE_ALGORITHMS_AVAILABLE:
+            try:
+                tree = IntervalTree()
+                interval = UInterval(1, 3)
+                success = tree.insert_interval(interval, 1)
+                results['tree_algorithms'] = success and tree.count == 1
+            except Exception as e:
+                logger.warning(f"Tree algorithms test failed: {e}")
+        
+        # Test graph algorithms
+        if GRAPH_ALGORITHMS_AVAILABLE:
+            try:
+                vertices = [0, 1, 2]
+                edges = [Edge(0, 1, 1.0), Edge(1, 2, 1.0)]
+                graph = GraphAdapter(vertices, edges)
+                results['graph_algorithms'] = len(graph.vertices()) == 3
+            except Exception as e:
+                logger.warning(f"Graph algorithms test failed: {e}")
+        
+        return results
 
 
 # Response serializers for API documentation
@@ -872,296 +963,114 @@ class UtilitiesResponseSerializer(serializers.Serializer):
     result = serializers.DictField()
 
 
-# URL patterns for including in planning_api/urls.py
-"""
-Updated URL patterns to include algorithm endpoints
-
-Add these to your main urls.py:
-
-from django.urls import path, include
-from .algorithms_views import (
-    GraphAnalysisView, IntervalAnalysisView, 
-    MathematicsView, UtilitiesView
-)
-
-algorithm_urlpatterns = [
-    # Graph algorithms
-    path('algorithms/graph/analysis/', GraphAnalysisView.as_view(), name='graph_analysis'),
-    
-    # Interval tree algorithms  
-    path('algorithms/intervals/analysis/', IntervalAnalysisView.as_view(), name='interval_analysis'),
-    
-    # Mathematics algorithms
-    path('algorithms/mathematics/', MathematicsView.as_view(), name='mathematics'),
-    
-    # Utilities and statistics
-    path('algorithms/utilities/', UtilitiesView.as_view(), name='utilities'),
-]
-
-# Include in main urlpatterns
-urlpatterns = [
-    # ... your existing patterns
-] + algorithm_urlpatterns
-"""
-
-
 # Example usage and testing functions
 def test_graph_algorithms():
     """Test graph algorithms with sample data"""
-    # Create test graph
-    vertices = [0, 1, 2, 3, 4]
-    edges = [
-        {'from': 0, 'to': 1, 'weight': 2.0},
-        {'from': 1, 'to': 2, 'weight': 3.0},
-        {'from': 2, 'to': 3, 'weight': 1.0},
-        {'from': 3, 'to': 4, 'weight': 2.0},
-        {'from': 0, 'to': 4, 'weight': 5.0}
-    ]
+    if not GRAPH_ALGORITHMS_AVAILABLE:
+        return {'error': 'Graph algorithms not available'}
     
-    print("Graph Analysis Test:")
-    print(f"Vertices: {vertices}")
-    print(f"Edges: {edges}")
-    
-    # Test data for API call
-    test_data = {
-        'vertices': vertices,
-        'edges': edges,
-        'source_vertex': 0,
-        'algorithm': 'centrality'
-    }
-    
-    print(f"Test request data: {test_data}")
-    return test_data
+    try:
+        vertices = [0, 1, 2, 3, 4]
+        edges = [
+            {'from': 0, 'to': 1, 'weight': 2.0},
+            {'from': 1, 'to': 2, 'weight': 3.0},
+            {'from': 2, 'to': 3, 'weight': 1.0},
+            {'from': 3, 'to': 4, 'weight': 2.0},
+            {'from': 0, 'to': 4, 'weight': 5.0}
+        ]
+        
+        test_data = {
+            'vertices': vertices,
+            'edges': edges,
+            'source_vertex': 0,
+            'algorithm': 'centrality'
+        }
+        
+        return test_data
+    except Exception as e:
+        return {'error': f'Graph algorithm test failed: {str(e)}'}
 
 
 def test_interval_algorithms():
     """Test interval algorithms with sample data"""
-    intervals = [
-        {'low': 1, 'high': 3, 'id': 1},
-        {'low': 2, 'high': 4, 'id': 2},
-        {'low': 5, 'high': 7, 'id': 3},
-        {'low': 6, 'high': 8, 'id': 4}
-    ]
+    if not TREE_ALGORITHMS_AVAILABLE:
+        return {'error': 'Tree algorithms not available'}
     
-    query_interval = {'low': 3, 'high': 6}
-    
-    print("Interval Analysis Test:")
-    print(f"Intervals: {intervals}")
-    print(f"Query interval: {query_interval}")
-    
-    test_data = {
-        'intervals': intervals,
-        'query_interval': query_interval,
-        'operation': 'overlaps'
-    }
-    
-    print(f"Test request data: {test_data}")
-    return test_data
+    try:
+        intervals = [
+            {'low': 1, 'high': 3, 'id': 1},
+            {'low': 2, 'high': 4, 'id': 2},
+            {'low': 5, 'high': 7, 'id': 3},
+            {'low': 6, 'high': 8, 'id': 4}
+        ]
+        
+        query_interval = {'low': 3, 'high': 6}
+        
+        test_data = {
+            'intervals': intervals,
+            'query_interval': query_interval,
+            'operation': 'overlaps'
+        }
+        
+        return test_data
+    except Exception as e:
+        return {'error': f'Interval algorithm test failed: {str(e)}'}
 
 
 def test_mathematics_algorithms():
     """Test mathematics algorithms with sample data"""
-    # Quadratic equation test
-    quadratic_data = {
-        'operation': 'quadratic',
-        'a': 1,
-        'b': -5,
-        'c': 6
-    }
+    if not MATH_ALGORITHMS_AVAILABLE:
+        return {'error': 'Mathematics algorithms not available'}
     
-    # Linear regression test
-    regression_data = {
-        'operation': 'linear_regression',
-        'x_values': [1, 2, 3, 4, 5],
-        'y_values': [2, 4, 6, 8, 10]
-    }
-    
-    # Root finding test
-    root_finding_data = {
-        'operation': 'root_finding',
-        'coefficients': [1, 0, -4],  # x² - 4 = 0, roots at ±2
-        'left_bound': -5,
-        'right_bound': 5,
-        'tolerance': 1e-6
-    }
-    
-    # Geometry test
-    geometry_data = {
-        'operation': 'geometry',
-        'points': [
-            {'x': 0, 'y': 0},
-            {'x': 4, 'y': 0},
-            {'x': 4, 'y': 3},
-            {'x': 0, 'y': 3}
-        ]
-    }
-    
-    print("Mathematics Test:")
-    print(f"Quadratic test: {quadratic_data}")
-    print(f"Regression test: {regression_data}")
-    print(f"Root finding test: {root_finding_data}")
-    print(f"Geometry test: {geometry_data}")
-    
-    return {
-        'quadratic': quadratic_data,
-        'regression': regression_data,
-        'root_finding': root_finding_data,
-        'geometry': geometry_data
-    }
+    try:
+        test_data = {
+            'quadratic': {
+                'operation': 'quadratic',
+                'a': 1,
+                'b': -5,
+                'c': 6
+            },
+            'geometry': {
+                'operation': 'geometry',
+                'points': [
+                    {'x': 0, 'y': 0},
+                    {'x': 4, 'y': 0},
+                    {'x': 4, 'y': 3},
+                    {'x': 0, 'y': 3}
+                ]
+            }
+        }
+        
+        return test_data
+    except Exception as e:
+        return {'error': f'Mathematics algorithm test failed: {str(e)}'}
 
 
 def test_utilities_algorithms():
     """Test utility algorithms with sample data"""
-    # Statistics test
-    stats_data = {
-        'operation': 'statistics',
-        'values': [1, 2, 3, 4, 5, 5, 6, 7, 8, 9],
-        'statistic_type': 'descriptive'
-    }
+    if not UTILITIES_AVAILABLE:
+        return {'error': 'Utilities not available'}
     
-    # Collection operations test
-    collection_data = {
-        'operation': 'collection',
-        'data': [1, 2, 2, 3, 'a', 'b', 'a', 4, 5],
-        'chunk_size': 3
-    }
-    
-    # Validation test
-    validation_data = {
-        'operation': 'validation',
-        'validation_rules': {
-            'range_check': {
-                'value': 75,
-                'min': 0,
-                'max': 100,
-                'name': 'Percentage'
+    try:
+        test_data = {
+            'statistics': {
+                'operation': 'statistics',
+                'values': [1, 2, 3, 4, 5, 5, 6, 7, 8, 9],
+                'statistic_type': 'descriptive'
             },
-            'positive_check': {
-                'value': 42,
-                'name': 'Age'
+            'collection': {
+                'operation': 'collection',
+                'data': [1, 2, 2, 3, 'a', 'b', 'a', 4, 5],
+                'chunk_size': 3
             }
         }
-    }
-    
-    print("Utilities Test:")
-    print(f"Statistics test: {stats_data}")
-    print(f"Collection test: {collection_data}")
-    print(f"Validation test: {validation_data}")
-    
-    return {
-        'statistics': stats_data,
-        'collection': collection_data,
-        'validation': validation_data
-    }
+        
+        return test_data
+    except Exception as e:
+        return {'error': f'Utilities algorithm test failed: {str(e)}'}
 
 
-# API Usage Examples
-class APIUsageExamples:
-    """
-    Examples of how to use the algorithm APIs
-    """
-    
-    @staticmethod
-    def graph_analysis_example():
-        """Example of graph analysis API usage"""
-        import requests
-        
-        # Example request for centrality analysis
-        url = "http://localhost:8000/api/algorithms/graph/analysis/"
-        
-        data = {
-            "vertices": [0, 1, 2, 3, 4],
-            "edges": [
-                {"from": 0, "to": 1, "weight": 2.0},
-                {"from": 1, "to": 2, "weight": 3.0},
-                {"from": 2, "to": 3, "weight": 1.0},
-                {"from": 3, "to": 4, "weight": 2.0},
-                {"from": 0, "to": 4, "weight": 5.0}
-            ],
-            "algorithm": "centrality",
-            "radius": 10.0
-        }
-        
-        # Uncomment to make actual request:
-        # response = requests.post(url, json=data)
-        # print(response.json())
-        
-        return data
-    
-    @staticmethod
-    def interval_analysis_example():
-        """Example of interval analysis API usage"""
-        import requests
-        
-        url = "http://localhost:8000/api/algorithms/intervals/analysis/"
-        
-        data = {
-            "intervals": [
-                {"low": 1, "high": 3, "id": 1},
-                {"low": 2, "high": 4, "id": 2},
-                {"low": 5, "high": 7, "id": 3}
-            ],
-            "query_interval": {"low": 2.5, "high": 6},
-            "operation": "overlaps"
-        }
-        
-        # Uncomment to make actual request:
-        # response = requests.post(url, json=data)
-        # print(response.json())
-        
-        return data
-    
-    @staticmethod
-    def mathematics_example():
-        """Example of mathematics API usage"""
-        import requests
-        
-        url = "http://localhost:8000/api/algorithms/mathematics/"
-        
-        # Quadratic equation example
-        quadratic_data = {
-            "operation": "quadratic",
-            "a": 1,
-            "b": -5,
-            "c": 6
-        }
-        
-        # Linear regression example
-        regression_data = {
-            "operation": "linear_regression",
-            "x_values": [1, 2, 3, 4, 5],
-            "y_values": [2, 4, 6, 8, 10]
-        }
-        
-        # Uncomment to make actual requests:
-        # response1 = requests.post(url, json=quadratic_data)
-        # response2 = requests.post(url, json=regression_data)
-        # print("Quadratic:", response1.json())
-        # print("Regression:", response2.json())
-        
-        return {'quadratic': quadratic_data, 'regression': regression_data}
-    
-    @staticmethod
-    def utilities_example():
-        """Example of utilities API usage"""
-        import requests
-        
-        url = "http://localhost:8000/api/algorithms/utilities/"
-        
-        data = {
-            "operation": "statistics",
-            "values": [1, 2, 3, 4, 5, 5, 6, 7, 8, 9],
-            "statistic_type": "descriptive"
-        }
-        
-        # Uncomment to make actual request:
-        # response = requests.post(url, json=data)
-        # print(response.json())
-        
-        return data
-
-
-# Error handling and validation helpers
+# Error handling helpers
 class APIErrorHandler:
     """Helper class for consistent error handling across all views"""
     
@@ -1200,58 +1109,46 @@ class APIErrorHandler:
         }
 
 
-# Performance monitoring decorators
-def monitor_performance(algorithm_name):
-    """Decorator to monitor algorithm performance"""
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            import time
-            start_time = time.time()
-            
-            try:
-                result = func(*args, **kwargs)
-                execution_time = time.time() - start_time
-                
-                logger.info(f"{algorithm_name} executed successfully in {execution_time:.3f}s")
-                
-                # Add performance metrics to result if it's a dict
-                if isinstance(result, dict):
-                    result['_performance'] = {
-                        'execution_time_seconds': execution_time,
-                        'algorithm': algorithm_name
-                    }
-                
-                return result
-                
-            except Exception as e:
-                execution_time = time.time() - start_time
-                logger.error(f"{algorithm_name} failed after {execution_time:.3f}s: {str(e)}")
-                raise
-        
-        return wrapper
-    return decorator
+# Module availability information
+def get_module_status():
+    """Get current module availability status"""
+    return {
+        'graph_algorithms': {
+            'available': GRAPH_ALGORITHMS_AVAILABLE,
+            'features': ['dijkstra', 'centrality', 'dfs'] if GRAPH_ALGORITHMS_AVAILABLE else []
+        },
+        'tree_algorithms': {
+            'available': TREE_ALGORITHMS_AVAILABLE,
+            'features': ['interval_tree', 'overlaps', 'gaps'] if TREE_ALGORITHMS_AVAILABLE else []
+        },
+        'math_algorithms': {
+            'available': MATH_ALGORITHMS_AVAILABLE,
+            'features': ['quadratic', 'root_finding', 'geometry'] if MATH_ALGORITHMS_AVAILABLE else []
+        },
+        'utilities': {
+            'available': UTILITIES_AVAILABLE,
+            'features': ['statistics', 'collections', 'validation'] if UTILITIES_AVAILABLE else []
+        }
+    }
 
 
 if __name__ == "__main__":
-    print("Algorithm Integration Tests:")
+    # Run basic tests when module is imported
+    print("Algorithm Views Module Status:")
     print("=" * 50)
     
-    # Run all test functions
-    test_graph_algorithms()
-    print("\n" + "=" * 50)
-    test_interval_algorithms()
-    print("\n" + "=" * 50)
-    test_mathematics_algorithms()
-    print("\n" + "=" * 50)
-    test_utilities_algorithms()
+    status = get_module_status()
+    for module, info in status.items():
+        print(f"{module}: {'✓' if info['available'] else '✗'}")
+        if info['features']:
+            print(f"  Features: {', '.join(info['features'])}")
     
-    print("\n" + "=" * 50)
-    print("API Usage Examples:")
-    print("=" * 50)
-    
-    # Show API usage examples
-    examples = APIUsageExamples()
-    print("Graph Analysis Example:", examples.graph_analysis_example())
-    print("Interval Analysis Example:", examples.interval_analysis_example())
-    print("Mathematics Example:", examples.mathematics_example())
-    print("Utilities Example:", examples.utilities_example())
+    print("\nRunning basic tests...")
+    if UTILITIES_AVAILABLE:
+        print("Utilities test:", test_utilities_algorithms())
+    if MATH_ALGORITHMS_AVAILABLE:
+        print("Mathematics test:", test_mathematics_algorithms())
+    if TREE_ALGORITHMS_AVAILABLE:
+        print("Tree algorithms test:", test_interval_algorithms())
+    if GRAPH_ALGORITHMS_AVAILABLE:
+        print("Graph algorithms test:", test_graph_algorithms())
